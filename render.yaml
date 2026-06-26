@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: lol-info-api
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: cd server && npm install && npx prisma generate && npm run build
+    startCommand: cd server && npm run start
+    envVars:
+      - key: RIOT_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lol-info-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_URL
+        value: https://lol-info.onrender.com
+
+  - type: web
+    name: lol-info
+    runtime: static
+    buildCommand: cd client && npm install && npm run build
+    staticPublishPath: client/dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=0, must-revalidate
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://lol-info-api.onrender.com
+
+databases:
+  - name: lol-info-db
+    plan: free
+    region: frankfurt

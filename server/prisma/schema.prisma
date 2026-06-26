@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PlayerCache {
+  id            String   @id @default(cuid())
+  puuid         String
+  region        String
+  gameName      String
+  tagLine       String
+  summonerData  Json?
+  rankedData    Json?
+  masteryData   Json?
+  matchData     Json?
+  tftRankedData Json?
+  tftMatchData  Json?
+  cachedAt      DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([puuid, region])
+  @@index([gameName, tagLine, region])
+  @@map("player_cache")
+}
+
+model SearchHistory {
+  id           String   @id @default(cuid())
+  gameName     String
+  tagLine      String
+  region       String
+  searchCount  Int      @default(1)
+  lastSearched DateTime @default(now())
+
+  @@unique([gameName, tagLine, region])
+  @@index([lastSearched])
+  @@map("search_history")
+}
