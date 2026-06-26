@@ -4,7 +4,7 @@ services:
     runtime: node
     region: frankfurt
     plan: free
-    buildCommand: cd server && npm install && npx prisma generate && npm run build
+    buildCommand: cd server && npm install --include=dev && npx prisma generate && npm run build
     startCommand: cd server && npm run start
     envVars:
       - key: RIOT_API_KEY
@@ -21,7 +21,7 @@ services:
   - type: web
     name: lol-info
     runtime: static
-    buildCommand: cd client && npm install && npm run build
+    buildCommand: cd client && npm install --include=dev && npm run build
     staticPublishPath: client/dist
     headers:
       - path: /*
