@@ -21,6 +21,9 @@ Thumbs.db
 
 # Prisma
 server/prisma/migrations/
+server/prisma/dev.db
+server/prisma/*.db
+server/prisma/*.db-journal
 
 # Logs
 *.log

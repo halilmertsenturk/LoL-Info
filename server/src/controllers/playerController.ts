@@ -17,13 +17,48 @@ import {
 } from '../services/riotApiService';
 import {
   getCachedPlayerProfile,
+  getCachedPlayerProfileByName,
   cachePlayerProfile,
   getCachedTftProfile,
+  getCachedTftProfileByName,
   cacheTftProfile,
   recordSearch,
   getSearchHistory,
 } from '../services/cacheService';
 import { getRegionMapping } from '../utils/regionMapper';
+
+function isRiotAuthFailure(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.message.includes('API key') || error.message.includes('forbidden'))
+  );
+}
+
+function sendCachedProfile(
+  res: Response,
+  profile: PlayerProfile,
+  options: { stale?: boolean } = {}
+): void {
+  res.json({
+    success: true,
+    data: profile,
+    fromCache: true,
+    stale: options.stale ?? false,
+  });
+}
+
+function sendCachedTftProfile(
+  res: Response,
+  profile: TftProfile,
+  options: { stale?: boolean } = {}
+): void {
+  res.json({
+    success: true,
+    data: profile,
+    fromCache: true,
+    stale: options.stale ?? false,
+  });
+}
 
 /**
  * GET /api/player/:region/:gameName/:tagLine
@@ -49,24 +84,48 @@ export async function getPlayerProfile(
     // Record search history (fire-and-forget)
     recordSearch(gameName, tagLine, regionMapping.platformId).catch(() => {});
 
-    // Step 1: Resolve Riot account to get PUUID
-    const account = await getAccountByRiotId(region, gameName, tagLine);
-
-    // Step 2: Check cache
-    const cached = await getCachedPlayerProfile(account.puuid, regionMapping.platformId);
-    if (cached) {
-      res.json({
-        success: true,
-        data: cached,
-        fromCache: true,
-      });
+    // Step 1: Serve fresh cache without hitting Riot when possible
+    const cachedByName = await getCachedPlayerProfileByName(
+      gameName,
+      tagLine,
+      regionMapping.platformId
+    );
+    if (cachedByName) {
+      sendCachedProfile(res, cachedByName);
       return;
     }
 
-    // Step 3: Fetch summoner data
+    // Step 2: Resolve Riot account to get PUUID
+    let account;
+    try {
+      account = await getAccountByRiotId(region, gameName, tagLine);
+    } catch (error) {
+      if (isRiotAuthFailure(error)) {
+        const staleProfile = await getCachedPlayerProfileByName(
+          gameName,
+          tagLine,
+          regionMapping.platformId,
+          { allowStale: true }
+        );
+        if (staleProfile) {
+          sendCachedProfile(res, staleProfile, { stale: true });
+          return;
+        }
+      }
+      throw error;
+    }
+
+    // Step 3: Check cache
+    const cached = await getCachedPlayerProfile(account.puuid, regionMapping.platformId);
+    if (cached) {
+      sendCachedProfile(res, cached);
+      return;
+    }
+
+    // Step 4: Fetch summoner data
     const summoner = await getSummonerByPuuid(region, account.puuid);
 
-    // Step 4: Fetch ranked, mastery, and match IDs in parallel
+    // Step 5: Fetch ranked, mastery, and match IDs in parallel
     const [leagueEntries, masteries, matchIds] = await Promise.all([
       getLeagueEntries(region, summoner.id),
       getChampionMasteries(region, account.puuid, 7),
@@ -78,7 +137,7 @@ export async function getPlayerProfile(
     const rankedData = transformRankedData(leagueEntries);
     const masteryData = transformMasteryData(masteries);
 
-    // Step 6: Fetch match details (batched)
+    // Step 7: Fetch match details (batched)
     const matchData = await fetchAndTransformMatches(region, account.puuid, matchIds);
 
     // Step 7: Build response
@@ -136,21 +195,41 @@ export async function getTftPlayerProfile(
     // Record search history (fire-and-forget)
     recordSearch(gameName, tagLine, regionMapping.platformId).catch(() => {});
 
-    // Step 1: Resolve Riot account to get PUUID
-    const account = await getAccountByRiotId(region, gameName, tagLine);
-
-    // Step 2: Check cache
-    const cached = await getCachedTftProfile(account.puuid, regionMapping.platformId);
-    if (cached) {
-      res.json({
-        success: true,
-        data: cached,
-        fromCache: true,
-      });
+    const cachedByName = await getCachedTftProfileByName(
+      gameName,
+      tagLine,
+      regionMapping.platformId
+    );
+    if (cachedByName) {
+      sendCachedTftProfile(res, cachedByName);
       return;
     }
 
-    // Step 3: Need summoner ID for TFT league entries
+    let account;
+    try {
+      account = await getAccountByRiotId(region, gameName, tagLine);
+    } catch (error) {
+      if (isRiotAuthFailure(error)) {
+        const staleProfile = await getCachedTftProfileByName(
+          gameName,
+          tagLine,
+          regionMapping.platformId,
+          { allowStale: true }
+        );
+        if (staleProfile) {
+          sendCachedTftProfile(res, staleProfile, { stale: true });
+          return;
+        }
+      }
+      throw error;
+    }
+
+    const cached = await getCachedTftProfile(account.puuid, regionMapping.platformId);
+    if (cached) {
+      sendCachedTftProfile(res, cached);
+      return;
+    }
+
     const summoner = await getSummonerByPuuid(region, account.puuid);
 
     // Step 4: Fetch TFT ranked and match IDs in parallel

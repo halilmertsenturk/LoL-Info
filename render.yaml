@@ -4,7 +4,7 @@ services:
     runtime: node
     region: frankfurt
     plan: free
-    buildCommand: cd server && npm install --include=dev && npx prisma generate && npm run build
+    buildCommand: cd server && npm install --include=dev && npx prisma generate && npx prisma db push && npm run build
     startCommand: cd server && npm run start
     envVars:
       - key: RIOT_API_KEY

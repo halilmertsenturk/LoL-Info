@@ -61,7 +61,7 @@ export function getChampionNameById(championId: number): string {
  * Creates an Axios instance with the Riot API key in headers.
  */
 function createApiClient(): AxiosInstance {
-  const apiKey = process.env.RIOT_API_KEY;
+  const apiKey = process.env.RIOT_API_KEY?.trim();
   if (!apiKey) {
     throw new ApiError('RIOT_API_KEY is not configured', 500);
   }
@@ -80,6 +80,7 @@ function createApiClient(): AxiosInstance {
  */
 async function riotApiRequest<T>(url: string): Promise<T> {
   const client = createApiClient();
+  console.log(`[Riot API] Requesting: ${url}`);
 
   try {
     const response = await client.get<T>(url);
@@ -88,6 +89,7 @@ async function riotApiRequest<T>(url: string): Promise<T> {
     if (error instanceof AxiosError) {
       const status = error.response?.status;
       const statusText = error.response?.statusText || 'Unknown Error';
+      console.error(`[Riot API] Failed ${url} with status ${status} ${statusText}`);
 
       switch (status) {
         case 400:

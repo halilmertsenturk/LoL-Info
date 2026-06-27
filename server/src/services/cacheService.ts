@@ -14,6 +14,10 @@ import {
 // Cache TTL: 10 minutes in milliseconds
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
+interface CacheLookupOptions {
+  allowStale?: boolean;
+}
+
 /**
  * Checks if a cached entry is still valid (within 10-minute window).
  */
@@ -21,6 +25,42 @@ function isCacheValid(cachedAt: Date): boolean {
   const now = Date.now();
   const cachedTime = cachedAt.getTime();
   return now - cachedTime < CACHE_TTL_MS;
+}
+
+function buildPlayerProfileFromCache(cached: {
+  summonerData: unknown;
+  rankedData: unknown;
+  masteryData: unknown;
+  matchData: unknown;
+  cachedAt: Date;
+}): PlayerProfile | null {
+  if (!cached.summonerData || !cached.rankedData || !cached.masteryData || !cached.matchData) {
+    return null;
+  }
+
+  return {
+    summoner: cached.summonerData as unknown as SummonerProfile,
+    ranked: cached.rankedData as unknown as RankedInfo[],
+    mastery: cached.masteryData as unknown as ChampionMasteryInfo[],
+    matches: cached.matchData as unknown as MatchSummary[],
+    cachedAt: cached.cachedAt.toISOString(),
+  };
+}
+
+function buildTftProfileFromCache(cached: {
+  tftRankedData: unknown;
+  tftMatchData: unknown;
+  cachedAt: Date;
+}): TftProfile | null {
+  if (!cached.tftRankedData || !cached.tftMatchData) {
+    return null;
+  }
+
+  return {
+    ranked: cached.tftRankedData as unknown as TftRankedInfo[],
+    matches: cached.tftMatchData as unknown as TftMatchSummary[],
+    cachedAt: cached.cachedAt.toISOString(),
+  };
 }
 
 // ==========================================
@@ -33,7 +73,8 @@ function isCacheValid(cachedAt: Date): boolean {
  */
 export async function getCachedPlayerProfile(
   puuid: string,
-  region: string
+  region: string,
+  options: CacheLookupOptions = {}
 ): Promise<PlayerProfile | null> {
   try {
     const cached = await prisma.playerCache.findUnique({
@@ -42,24 +83,39 @@ export async function getCachedPlayerProfile(
       },
     });
 
-    if (!cached || !isCacheValid(cached.cachedAt)) {
+    if (!cached || (!options.allowStale && !isCacheValid(cached.cachedAt))) {
       return null;
     }
 
-    // All required LoL data must be present
-    if (!cached.summonerData || !cached.rankedData || !cached.masteryData || !cached.matchData) {
-      return null;
-    }
-
-    return {
-      summoner: cached.summonerData as unknown as SummonerProfile,
-      ranked: cached.rankedData as unknown as RankedInfo[],
-      mastery: cached.masteryData as unknown as ChampionMasteryInfo[],
-      matches: cached.matchData as unknown as MatchSummary[],
-      cachedAt: cached.cachedAt.toISOString(),
-    };
+    return buildPlayerProfileFromCache(cached);
   } catch (error) {
     console.error('⚠️ Cache read error (player profile):', error);
+    return null;
+  }
+}
+
+/**
+ * Retrieves cached LoL profile by Riot ID without calling the Riot API.
+ */
+export async function getCachedPlayerProfileByName(
+  gameName: string,
+  tagLine: string,
+  region: string,
+  options: CacheLookupOptions = {}
+): Promise<PlayerProfile | null> {
+  try {
+    const cached = await prisma.playerCache.findFirst({
+      where: { gameName, tagLine, region },
+      orderBy: { cachedAt: 'desc' },
+    });
+
+    if (!cached || (!options.allowStale && !isCacheValid(cached.cachedAt))) {
+      return null;
+    }
+
+    return buildPlayerProfileFromCache(cached);
+  } catch (error) {
+    console.error('⚠️ Cache read error (player profile by name):', error);
     return null;
   }
 }
@@ -114,7 +170,8 @@ export async function cachePlayerProfile(
  */
 export async function getCachedTftProfile(
   puuid: string,
-  region: string
+  region: string,
+  options: CacheLookupOptions = {}
 ): Promise<TftProfile | null> {
   try {
     const cached = await prisma.playerCache.findUnique({
@@ -123,21 +180,39 @@ export async function getCachedTftProfile(
       },
     });
 
-    if (!cached || !isCacheValid(cached.cachedAt)) {
+    if (!cached || (!options.allowStale && !isCacheValid(cached.cachedAt))) {
       return null;
     }
 
-    if (!cached.tftRankedData || !cached.tftMatchData) {
-      return null;
-    }
-
-    return {
-      ranked: cached.tftRankedData as unknown as TftRankedInfo[],
-      matches: cached.tftMatchData as unknown as TftMatchSummary[],
-      cachedAt: cached.cachedAt.toISOString(),
-    };
+    return buildTftProfileFromCache(cached);
   } catch (error) {
     console.error('⚠️ Cache read error (TFT profile):', error);
+    return null;
+  }
+}
+
+/**
+ * Retrieves cached TFT profile by Riot ID without calling the Riot API.
+ */
+export async function getCachedTftProfileByName(
+  gameName: string,
+  tagLine: string,
+  region: string,
+  options: CacheLookupOptions = {}
+): Promise<TftProfile | null> {
+  try {
+    const cached = await prisma.playerCache.findFirst({
+      where: { gameName, tagLine, region },
+      orderBy: { cachedAt: 'desc' },
+    });
+
+    if (!cached || (!options.allowStale && !isCacheValid(cached.cachedAt))) {
+      return null;
+    }
+
+    return buildTftProfileFromCache(cached);
+  } catch (error) {
+    console.error('⚠️ Cache read error (TFT profile by name):', error);
     return null;
   }
 }
