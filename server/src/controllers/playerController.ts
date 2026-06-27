@@ -169,7 +169,7 @@ export async function getPlayerProfile(
 
     // Step 5: Fetch ranked, mastery, and match IDs in parallel
     const [leagueEntries, masteries, matchIds] = await Promise.all([
-      getLeagueEntries(region, summoner.id),
+      getLeagueEntries(region, account.puuid),
       getChampionMasteries(region, account.puuid, 7),
       getMatchIds(region, account.puuid, 20),
     ]);
@@ -275,11 +275,8 @@ export async function getTftPlayerProfile(
       return;
     }
 
-    const summoner = await getSummonerByPuuid(region, account.puuid);
-
-    // Step 4: Fetch TFT ranked and match IDs in parallel
     const [tftLeagueEntries, tftMatchIds] = await Promise.all([
-      getTftLeagueEntries(region, summoner.id),
+      getTftLeagueEntries(region, account.puuid).catch(() => [] as Awaited<ReturnType<typeof getTftLeagueEntries>>),
       getTftMatchIds(region, account.puuid, 20),
     ]);
 

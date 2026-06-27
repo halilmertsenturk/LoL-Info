@@ -379,15 +379,15 @@ export async function getSummonerByPuuid(
 }
 
 /**
- * Get league entries by summoner ID.
+ * Get league entries by PUUID.
  */
 export async function getLeagueEntries(
   region: string,
-  summonerId: string
+  puuid: string
 ): Promise<LeagueEntryDto[]> {
   const { platformId } = getRegionMapping(region);
   const host = getPlatformHost(platformId);
-  const url = `https://${host}/lol/league/v4/entries/by-summoner/${summonerId}`;
+  const url = `https://${host}/lol/league/v4/entries/by-puuid/${puuid}`;
 
   return riotApiRequest<LeagueEntryDto[]>(url);
 }
@@ -437,15 +437,15 @@ export async function getMatchDetail(
 }
 
 /**
- * Get TFT league entries by summoner ID.
+ * Get TFT league entries by PUUID.
  */
 export async function getTftLeagueEntries(
   region: string,
-  summonerId: string
+  puuid: string
 ): Promise<TftLeagueEntryDto[]> {
   const { platformId } = getRegionMapping(region);
   const host = getPlatformHost(platformId);
-  const url = `https://${host}/tft/league/v1/entries/by-summoner/${summonerId}`;
+  const url = `https://${host}/tft/league/v1/entries/by-puuid/${puuid}`;
 
   return riotApiRequest<TftLeagueEntryDto[]>(url);
 }
@@ -492,7 +492,7 @@ export function transformSummonerData(
 ): SummonerProfile {
   return {
     puuid: summoner.puuid,
-    summonerId: summoner.id,
+    summonerId: summoner.id ?? summoner.puuid,
     gameName: account.gameName,
     tagLine: account.tagLine,
     profileIconId: summoner.profileIconId,

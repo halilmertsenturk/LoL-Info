@@ -9,8 +9,8 @@ export interface RiotAccountDto {
 }
 
 export interface SummonerDto {
-  id: string;
-  accountId: string;
+  id?: string;
+  accountId?: string;
   puuid: string;
   profileIconId: number;
   revisionDate: number;
