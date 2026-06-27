@@ -9,6 +9,12 @@ services:
     envVars:
       - key: RIOT_API_KEY
         sync: false
+      - key: RIOT_PROXY_URL
+        value: https://yearly-coordinated-boolean-horn.trycloudflare.com
+      - key: RIOT_PROXY_SECRET
+        value: 9b4b0827c4b61d07a741b453b4d962515a145ea581bbe237
+      - key: RIOT_CACHE_ONLY
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: lol-info-db

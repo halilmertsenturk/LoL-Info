@@ -22,6 +22,14 @@ import { getRegionMapping, getPlatformHost, getRoutingHost } from '../utils/regi
 
 const DDRAGON_VERSION = '15.1.1';
 const DDRAGON_BASE = `https://ddragon.leagueoflegends.com/cdn/${DDRAGON_VERSION}`;
+const RIOT_USER_AGENT = 'LoL-Info/1.0 (github.com/halilmertsenturk/LoL-Info)';
+
+export interface RiotKeyHealth {
+  configured: boolean;
+  valid: boolean;
+  statusCode?: number;
+  hint: string;
+}
 
 // In-memory champion ID-to-name map, loaded once on startup
 let championIdToName: Record<number, string> = {};
@@ -57,28 +65,268 @@ export function getChampionNameById(championId: number): string {
   return championIdToName[championId] || 'Unknown';
 }
 
+function getRiotProxyUrl(): string | null {
+  const proxyUrl = process.env.RIOT_PROXY_URL?.trim();
+  return proxyUrl ? proxyUrl.replace(/\/$/, '') : null;
+}
+
+function isRiotCacheOnlyMode(): boolean {
+  return process.env.RIOT_CACHE_ONLY === 'true';
+}
+
+export function isUsingRiotProxy(): boolean {
+  return getRiotProxyUrl() !== null;
+}
+
+function getRiotApiKey(): string | null {
+  const apiKey = process.env.RIOT_API_KEY?.trim();
+  return apiKey || null;
+}
+
+function requireRiotApiKey(): string {
+  const apiKey = getRiotApiKey();
+  if (!apiKey) {
+    throw new ApiError('RIOT_API_KEY is not configured on the server', 500);
+  }
+  return apiKey;
+}
+
+function requireRiotProxySecret(): string {
+  const secret = process.env.RIOT_PROXY_SECRET?.trim();
+  if (!secret) {
+    throw new ApiError('RIOT_PROXY_SECRET is required when RIOT_PROXY_URL is set', 500);
+  }
+  return secret;
+}
+
+function isCloudflareBlock(error: AxiosError): boolean {
+  const cfRay = error.response?.headers?.['cf-ray'];
+  if (cfRay) return true;
+
+  const body = error.response?.data;
+  const bodyText = typeof body === 'string' ? body : JSON.stringify(body ?? '');
+  return bodyText.toLowerCase().includes('cloudflare');
+}
+
+function getRiotAuthErrorMessage(error: AxiosError): string {
+  if (isCloudflareBlock(error)) {
+    return (
+      'Riot API blocked requests from this server IP. Development keys cannot power public apps — ' +
+      'apply for a Production or Personal API key at developer.riotgames.com.'
+    );
+  }
+
+  return (
+    'Riot API key is expired, invalid, or missing on the server. Regenerate the key in the ' +
+    'Riot Developer Portal and update RIOT_API_KEY in Render. Public sites require a Production key.'
+  );
+}
+
 /**
  * Creates an Axios instance with the Riot API key in headers.
  */
 function createApiClient(): AxiosInstance {
-  const apiKey = process.env.RIOT_API_KEY?.trim();
-  if (!apiKey) {
-    throw new ApiError('RIOT_API_KEY is not configured', 500);
-  }
-
   return axios.create({
     timeout: 15000,
     headers: {
-      'X-Riot-Token': apiKey,
-      'Accept': 'application/json',
+      'X-Riot-Token': requireRiotApiKey(),
+      Accept: 'application/json',
+      'User-Agent': RIOT_USER_AGENT,
     },
   });
+}
+
+function handleRiotAxiosError(error: AxiosError, url: string): never {
+  const status = error.response?.status;
+  const statusText = error.response?.statusText || 'Unknown Error';
+  console.error(`[Riot API] Failed ${url} with status ${status} ${statusText}`);
+
+  switch (status) {
+    case 400:
+      throw new ApiError('Bad request to Riot API', 400);
+    case 401:
+      throw new ApiError(getRiotAuthErrorMessage(error), 500);
+    case 403:
+      throw new ApiError(getRiotAuthErrorMessage(error), 500);
+    case 404:
+      throw new ApiError('Player not found', 404);
+    case 429:
+      throw new ApiError('Riot API rate limit exceeded. Please try again later.', 429);
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      throw new ApiError('Riot API is currently unavailable. Please try again later.', 503);
+    default:
+      throw new ApiError(`Riot API error: ${status} ${statusText}`, status || 500);
+  }
+}
+
+function handleRiotProxyResponse<T>(url: string, status: number, data: unknown): T {
+  if (status >= 200 && status < 300) {
+    return data as T;
+  }
+
+  const syntheticError = new AxiosError(
+    `Proxy returned ${status}`,
+    undefined,
+    undefined,
+    undefined,
+    {
+      status,
+      statusText: 'Proxy Error',
+      data,
+      headers: {},
+      config: {} as never,
+    }
+  );
+
+  handleRiotAxiosError(syntheticError, url);
+}
+
+async function riotApiRequestViaProxy<T>(url: string): Promise<T> {
+  const proxyUrl = getRiotProxyUrl();
+  if (!proxyUrl) {
+    throw new ApiError('RIOT_PROXY_URL is not configured', 500);
+  }
+
+  const secret = requireRiotProxySecret();
+  console.log(`[Riot API] Proxy request: ${url}`);
+
+  try {
+    const response = await axios.post(
+      `${proxyUrl}/forward`,
+      { url },
+      {
+        timeout: 20000,
+        headers: {
+          'X-Proxy-Secret': secret,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        validateStatus: () => true,
+      }
+    );
+
+    return handleRiotProxyResponse<T>(url, response.status, response.data);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    if (error instanceof AxiosError) {
+      if (error.response) {
+        handleRiotAxiosError(error, url);
+      }
+      throw new ApiError(
+        'Home Riot proxy is unreachable. Start home-riot-proxy.js and check RIOT_PROXY_URL.',
+        503
+      );
+    }
+    throw new ApiError('Failed to communicate with Riot home proxy', 500);
+  }
+}
+
+/**
+ * Verifies that the configured Riot API key works from this server.
+ */
+export async function checkRiotApiKey(): Promise<RiotKeyHealth> {
+  const proxyUrl = getRiotProxyUrl();
+  const apiKey = getRiotApiKey();
+  const testUrl = 'https://tr1.api.riotgames.com/lol/status/v4/platform-data';
+
+  if (proxyUrl) {
+    if (!process.env.RIOT_PROXY_SECRET?.trim()) {
+      return {
+        configured: false,
+        valid: false,
+        hint: 'RIOT_PROXY_URL is set but RIOT_PROXY_SECRET is missing on Render.',
+      };
+    }
+
+    try {
+      await riotApiRequestViaProxy(testUrl);
+      return {
+        configured: true,
+        valid: true,
+        hint: 'Riot API reachable via home proxy (residential IP bypass).',
+      };
+    } catch (error) {
+      if (error instanceof ApiError) {
+        return {
+          configured: true,
+          valid: false,
+          hint: error.message,
+        };
+      }
+      return {
+        configured: true,
+        valid: false,
+        hint: 'Home proxy configured but not reachable.',
+      };
+    }
+  }
+
+  if (!apiKey) {
+    return {
+      configured: false,
+      valid: false,
+      hint: 'Set RIOT_API_KEY (local) or RIOT_PROXY_URL + RIOT_PROXY_SECRET (Render).',
+    };
+  }
+
+  if (isRiotCacheOnlyMode()) {
+    return {
+      configured: true,
+      valid: true,
+      hint: 'RIOT_CACHE_ONLY mode — live Riot API disabled, serving cache only.',
+    };
+  }
+
+  try {
+    const client = createApiClient();
+    await client.get(testUrl);
+    return {
+      configured: true,
+      valid: true,
+      hint: 'Riot API key is valid for this server.',
+    };
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      const status = error.response?.status;
+      return {
+        configured: true,
+        valid: false,
+        statusCode: status,
+        hint:
+          `${getRiotAuthErrorMessage(error)} ` +
+          'Try RIOT_PROXY_URL with a home proxy, or apply for a Production/Personal key.',
+      };
+    }
+
+    return {
+      configured: true,
+      valid: false,
+      hint: 'Failed to reach Riot API from this server.',
+    };
+  }
 }
 
 /**
  * Wraps Riot API calls with proper error handling.
  */
 async function riotApiRequest<T>(url: string): Promise<T> {
+  if (isRiotCacheOnlyMode()) {
+    throw new ApiError(
+      'Live Riot API is disabled (RIOT_CACHE_ONLY). Only cached profiles are available.',
+      503
+    );
+  }
+
+  const proxyUrl = getRiotProxyUrl();
+  if (proxyUrl) {
+    return riotApiRequestViaProxy<T>(url);
+  }
+
   const client = createApiClient();
   console.log(`[Riot API] Requesting: ${url}`);
 
@@ -87,29 +335,7 @@ async function riotApiRequest<T>(url: string): Promise<T> {
     return response.data;
   } catch (error) {
     if (error instanceof AxiosError) {
-      const status = error.response?.status;
-      const statusText = error.response?.statusText || 'Unknown Error';
-      console.error(`[Riot API] Failed ${url} with status ${status} ${statusText}`);
-
-      switch (status) {
-        case 400:
-          throw new ApiError('Bad request to Riot API', 400);
-        case 401:
-          throw new ApiError('Invalid Riot API key', 500);
-        case 403:
-          throw new ApiError('Riot API key expired or forbidden', 500);
-        case 404:
-          throw new ApiError('Player not found', 404);
-        case 429:
-          throw new ApiError('Riot API rate limit exceeded. Please try again later.', 429);
-        case 500:
-        case 502:
-        case 503:
-        case 504:
-          throw new ApiError('Riot API is currently unavailable. Please try again later.', 503);
-        default:
-          throw new ApiError(`Riot API error: ${status} ${statusText}`, status || 500);
-      }
+      handleRiotAxiosError(error, url);
     }
     throw new ApiError('Failed to communicate with Riot API', 500);
   }

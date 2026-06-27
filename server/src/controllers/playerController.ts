@@ -27,10 +27,17 @@ import {
 } from '../services/cacheService';
 import { getRegionMapping } from '../utils/regionMapper';
 
+function isRiotCacheOnlyMode(): boolean {
+  return process.env.RIOT_CACHE_ONLY === 'true';
+}
+
 function isRiotAuthFailure(error: unknown): boolean {
   return (
     error instanceof ApiError &&
-    (error.message.includes('API key') || error.message.includes('forbidden'))
+    (error.message.includes('API key') ||
+      error.message.includes('forbidden') ||
+      error.message.includes('blocked requests') ||
+      error.message.includes('proxy'))
   );
 }
 
@@ -58,6 +65,38 @@ function sendCachedTftProfile(
     fromCache: true,
     stale: options.stale ?? false,
   });
+}
+
+async function tryStaleProfileFallback(
+  res: Response,
+  gameName: string,
+  tagLine: string,
+  region: string
+): Promise<boolean> {
+  const staleProfile = await getCachedPlayerProfileByName(gameName, tagLine, region, {
+    allowStale: true,
+  });
+  if (staleProfile) {
+    sendCachedProfile(res, staleProfile, { stale: true });
+    return true;
+  }
+  return false;
+}
+
+async function tryStaleTftFallback(
+  res: Response,
+  gameName: string,
+  tagLine: string,
+  region: string
+): Promise<boolean> {
+  const staleProfile = await getCachedTftProfileByName(gameName, tagLine, region, {
+    allowStale: true,
+  });
+  if (staleProfile) {
+    sendCachedTftProfile(res, staleProfile, { stale: true });
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -95,20 +134,23 @@ export async function getPlayerProfile(
       return;
     }
 
+    if (isRiotCacheOnlyMode()) {
+      if (await tryStaleProfileFallback(res, gameName, tagLine, regionMapping.platformId)) {
+        return;
+      }
+      throw new ApiError(
+        'Profile not in cache. Enable RIOT_PROXY_URL or search this player locally first to seed cache.',
+        503
+      );
+    }
+
     // Step 2: Resolve Riot account to get PUUID
     let account;
     try {
       account = await getAccountByRiotId(region, gameName, tagLine);
     } catch (error) {
       if (isRiotAuthFailure(error)) {
-        const staleProfile = await getCachedPlayerProfileByName(
-          gameName,
-          tagLine,
-          regionMapping.platformId,
-          { allowStale: true }
-        );
-        if (staleProfile) {
-          sendCachedProfile(res, staleProfile, { stale: true });
+        if (await tryStaleProfileFallback(res, gameName, tagLine, regionMapping.platformId)) {
           return;
         }
       }
@@ -205,19 +247,22 @@ export async function getTftPlayerProfile(
       return;
     }
 
+    if (isRiotCacheOnlyMode()) {
+      if (await tryStaleTftFallback(res, gameName, tagLine, regionMapping.platformId)) {
+        return;
+      }
+      throw new ApiError(
+        'TFT profile not in cache. Enable RIOT_PROXY_URL or search this player locally first to seed cache.',
+        503
+      );
+    }
+
     let account;
     try {
       account = await getAccountByRiotId(region, gameName, tagLine);
     } catch (error) {
       if (isRiotAuthFailure(error)) {
-        const staleProfile = await getCachedTftProfileByName(
-          gameName,
-          tagLine,
-          regionMapping.platformId,
-          { allowStale: true }
-        );
-        if (staleProfile) {
-          sendCachedTftProfile(res, staleProfile, { stale: true });
+        if (await tryStaleTftFallback(res, gameName, tagLine, regionMapping.platformId)) {
           return;
         }
       }

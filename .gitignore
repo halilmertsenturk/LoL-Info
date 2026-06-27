@@ -28,3 +28,8 @@ server/prisma/*.db-journal
 # Logs
 *.log
 npm-debug.log*
+
+# Local proxy runtime
+server/.proxy-url
+server/.proxy-stack.pid
+server/.proxy-tunnel.log

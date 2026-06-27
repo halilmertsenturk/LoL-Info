@@ -1,8 +1,9 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load .env from server/.env
-dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
+}
 
 import express from 'express';
 import cors from 'cors';
@@ -10,7 +11,7 @@ import { connectDatabase, disconnectDatabase } from './config/database';
 import playerRoutes from './routes/playerRoutes';
 import rateLimiter from './middleware/rateLimiter';
 import errorHandler from './middleware/errorHandler';
-import { loadChampionData } from './services/riotApiService';
+import { loadChampionData, checkRiotApiKey, isUsingRiotProxy } from './services/riotApiService';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -49,6 +50,17 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+app.get('/api/health/riot', async (_req, res) => {
+  const riotHealth = await checkRiotApiKey();
+  res.status(riotHealth.valid ? 200 : 503).json({
+    success: riotHealth.valid,
+    ...riotHealth,
+    proxyMode: isUsingRiotProxy(),
+    cacheOnlyMode: process.env.RIOT_CACHE_ONLY === 'true',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // API routes
 app.use('/api', playerRoutes);
 
@@ -74,6 +86,13 @@ async function startServer(): Promise<void> {
 
     // Load champion data from Data Dragon
     await loadChampionData();
+
+    const riotHealth = await checkRiotApiKey();
+    if (riotHealth.valid) {
+      console.log('✅ Riot API key verified');
+    } else {
+      console.warn(`⚠️ Riot API key check failed: ${riotHealth.hint}`);
+    }
 
     // Start HTTP server
     const server = app.listen(PORT, () => {
